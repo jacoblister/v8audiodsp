@@ -1,11 +1,13 @@
-#v8audiodsp - Embedding the chrome V8 engine for real time audio DSP in javascript
+v8audiodsp - Embedding the chrome V8 engine for real time audio DSP in javascript
+=================================================================================
 
 Proof on concept low latency real time audio DSP using the Chrome V8 engine 
 
 Building V8
 -----------
 * Follow the instruction for building the V8 engine form source here:
-http://blog.scaleprocess.net/building-v8-on-arch-linux/
+ 
+  http://blog.scaleprocess.net/building-v8-on-arch-linux/
 * Install the V8 engine source code in ~/v8 (/home/user/v8) or change the
 Makefile in the demo to specify it's location
 
