@@ -11,6 +11,8 @@ Makefile in the demo to specify it's location
 
 Building demo
 -------------
+* copy 'natives_blob.bin' and 'snapshot_blob.bin' from the V8 build
+top level directory
 * just run 'Make' top directory, this will project 'jack-client'
 
 
