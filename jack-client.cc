@@ -12,18 +12,22 @@
 #include "include/v8.h"
 
 class V8Process {
-  private:
+  public:
     v8::Isolate::CreateParams create_params;
     v8::Isolate* isolate;
     v8::Eternal<v8::Context> context;
+    v8::Eternal<v8::Function> start_function;
     v8::Eternal<v8::Function> process_function;
+    v8::Eternal<v8::Function> dummy_load_function;
 
     int samples_per_frame;
   public:
     V8Process() {}
-    void init(int sampling_rate, int samples_per_frame);
     void compile(std::string filename);
     void compile_source(std::string filename);
+
+    void init(int sampling_rate, int samples_per_frame);
+    void prerun();
     float *process(float *samples);
     void shutdown(void);
 };
@@ -68,6 +72,15 @@ void ConsoleLog(const v8::FunctionCallbackInfo<v8::Value>& args) {
   fflush(stdout);
 }
 
+void V8Process::prerun() {
+    // Dummy run process function to attempt to optimise
+    float *dummybuf = (float *)calloc(samples_per_frame, sizeof(float));
+    for(int i = 0; i < 100; i++) {
+        this->process(dummybuf);
+    }
+    free(dummybuf);
+}
+
 void V8Process::init(int sampling_rate, int samples_per_frame) {
     this->samples_per_frame = samples_per_frame;
 
@@ -110,18 +123,21 @@ void V8Process::init(int sampling_rate, int samples_per_frame) {
     v8::Local<v8::Function> start_function = v8::Local<v8::Function>::Cast(start_function_value);
     v8::Local<v8::Value> args[] = { v8::Number::New(this->isolate, (double)sampling_rate) };
     start_function->Call(local_context->Global(), 1, args);
+    this->start_function = v8::Eternal<v8::Function>(this->isolate, start_function);
 
     v8::Local<v8::Value> process_function_value = local_context->Global()->Get(v8::String::NewFromUtf8(isolate, "process"));
     v8::Local<v8::Function> process_function = v8::Local<v8::Function>::Cast(process_function_value);
     this->process_function = v8::Eternal<v8::Function>(this->isolate, process_function);
+
+    v8::Local<v8::Value> dummy_load_function_value = local_context->Global()->Get(v8::String::NewFromUtf8(isolate, "dummyLoad"));
+    v8::Local<v8::Function> dummy_load_function = v8::Local<v8::Function>::Cast(dummy_load_function_value);
+    this->dummy_load_function = v8::Eternal<v8::Function>(this->isolate, dummy_load_function);
 }
 
 float *V8Process::process(float *samples) {
-    // Run the script to get the result.
+    v8::Locker locker(this->isolate);
     v8::HandleScope handle_scope(this->isolate);
-
     v8::Local<v8::Context> local_context = this->context.Get(this->isolate);
-
     v8::Context::Scope context_scope(local_context);
 
     v8::Local<v8::ArrayBuffer> arrayBuffer = v8::ArrayBuffer::New(this->isolate, samples, this->samples_per_frame * sizeof(float));
@@ -143,6 +159,7 @@ void V8Process::shutdown(void) {
 }
 
 V8Process v8process;
+volatile bool backgroundRunning = 0;
 
 jack_client_t *jack_client;
 jack_port_t *jack_input_port;
@@ -151,24 +168,37 @@ jack_port_t *jack_output_port;
 #include <unistd.h>
 
 int process_jack(jack_nframes_t nframes, void *arg) {
-    static bool is_init = 0;
-
-    if (!is_init) {
-        printf("init jack thread\n");
-        v8process.init(jack_get_sample_rate(jack_client), nframes);
-        is_init = 1;
-    }
+//    static bool is_init = 0;
+//    if (!is_init) {
+//        printf("init jack thread\n");
+//        v8process.init(jack_get_sample_rate(jack_client), nframes);
+//        is_init = 1;
+//    }
 
 	jack_default_audio_sample_t *in, *out;
 
 	in = (jack_default_audio_sample_t *)jack_port_get_buffer(jack_input_port, nframes);
 	out = (jack_default_audio_sample_t *)jack_port_get_buffer(jack_output_port, nframes);
 
-    v8process.process(in);
+    if (!backgroundRunning) {
+        v8process.process(in);
+    }
 
 	memcpy(out, in, sizeof (jack_default_audio_sample_t) * nframes);
 
 	return 0;
+}
+
+void call_dummy_load() {
+    v8::Locker locker(v8process.isolate);
+    v8::HandleScope handle_scope(v8process.isolate);
+    v8::Local<v8::Context> local_context = v8process.context.Get(v8process.isolate);
+    v8::Context::Scope context_scope(local_context);
+
+    v8::Local<v8::Value> args[] = { v8::Number::New(v8process.isolate, 48000) };
+    backgroundRunning = 1;
+    v8process.dummy_load_function.Get(v8process.isolate)->Call(local_context->Global(), 1, args);
+    backgroundRunning = 0;
 }
 
 void run_jack(V8Process &v8process) {
@@ -180,6 +210,8 @@ void run_jack(V8Process &v8process) {
 
 	/* open a client connection to the JACK server */
     jack_client = jack_client_open(client_name, options, &status, server_name);
+    v8process.init(jack_get_sample_rate(jack_client), jack_get_buffer_size(jack_client));
+    v8process.prerun();
 
 	jack_input_port = jack_port_register (jack_client, "input",
 		                     			  JACK_DEFAULT_AUDIO_TYPE,
@@ -192,6 +224,8 @@ void run_jack(V8Process &v8process) {
 
     while(1) {
         usleep(1000000);
+
+//        call_dummy_load();
     }
 }
 
